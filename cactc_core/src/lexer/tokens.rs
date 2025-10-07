@@ -1,6 +1,7 @@
 use logos::{Lexer, Logos};
 use std::fmt::{self, Display, Formatter};
 use crate::errors::LexicalError;
+use crate::interner::{Symbol, INTERNER};
 
 fn parse_int(lex: &mut Lexer<Token>) -> Result<i32, LexicalError> {
     let slice = lex.slice();
@@ -82,8 +83,8 @@ pub enum Token {
     #[regex(r"0[xX][0-9a-fA-F]+|0[0-7]+|[0-9]+", parse_int)]
     IntConst(i32),
 
-    #[regex("[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string())]
-    Identifier(String),
+    #[regex("[a-zA-Z_][a-zA-Z0-9_]*", |lex| INTERNER.intern(lex.slice()))]
+    Identifier(Symbol),
 
     // --- Operators & Delimiters ---
     #[token("+")]
@@ -171,28 +172,28 @@ mod tests {
         // --- const int a = 10; ---
         assert_eq!(lexer.next(), Some(Ok(Token::Const)));
         assert_eq!(lexer.next(), Some(Ok(Token::IntType)));
-        assert_eq!(lexer.next(), Some(Ok(Token::Identifier("a".to_string()))));
+        assert_eq!(lexer.next(), Some(Ok(Token::Identifier(INTERNER.intern("a")))));
         assert_eq!(lexer.next(), Some(Ok(Token::Assign)));
         assert_eq!(lexer.next(), Some(Ok(Token::IntConst(10))));
         assert_eq!(lexer.next(), Some(Ok(Token::Semicolon)));
 
         // --- float pi = 3.14f; ---
         assert_eq!(lexer.next(), Some(Ok(Token::FloatType)));
-        assert_eq!(lexer.next(), Some(Ok(Token::Identifier("pi".to_string()))));
+        assert_eq!(lexer.next(), Some(Ok(Token::Identifier(INTERNER.intern("pi")))));
         assert_eq!(lexer.next(), Some(Ok(Token::Assign)));
         assert_eq!(lexer.next(), Some(Ok(Token::FloatConst(3.14f32))));
         assert_eq!(lexer.next(), Some(Ok(Token::Semicolon)));
         
         // --- double large_pi = 3.1415926; ---
         assert_eq!(lexer.next(), Some(Ok(Token::DoubleType)));
-        assert_eq!(lexer.next(), Some(Ok(Token::Identifier("large_pi".to_string()))));
+        assert_eq!(lexer.next(), Some(Ok(Token::Identifier(INTERNER.intern("large_pi")))));
         assert_eq!(lexer.next(), Some(Ok(Token::Assign)));
         assert_eq!(lexer.next(), Some(Ok(Token::DoubleConst(3.1415926f64))));
         assert_eq!(lexer.next(), Some(Ok(Token::Semicolon)));
 
         // --- int main() { ---
         assert_eq!(lexer.next(), Some(Ok(Token::IntType)));
-        assert_eq!(lexer.next(), Some(Ok(Token::Identifier("main".to_string()))));
+        assert_eq!(lexer.next(), Some(Ok(Token::Identifier(INTERNER.intern("main")))));
         assert_eq!(lexer.next(), Some(Ok(Token::LParen)));
         assert_eq!(lexer.next(), Some(Ok(Token::RParen)));
         assert_eq!(lexer.next(), Some(Ok(Token::LBrace)));
@@ -200,7 +201,7 @@ mod tests {
         // --- if (a > 0) { ---
         assert_eq!(lexer.next(), Some(Ok(Token::If)));
         assert_eq!(lexer.next(), Some(Ok(Token::LParen)));
-        assert_eq!(lexer.next(), Some(Ok(Token::Identifier("a".to_string()))));
+        assert_eq!(lexer.next(), Some(Ok(Token::Identifier(INTERNER.intern("a")))));
         assert_eq!(lexer.next(), Some(Ok(Token::Gt)));
         assert_eq!(lexer.next(), Some(Ok(Token::IntConst(0))));
         assert_eq!(lexer.next(), Some(Ok(Token::RParen)));
