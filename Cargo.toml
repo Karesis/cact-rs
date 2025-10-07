@@ -1,0 +1,11 @@
+[workspace]
+resolver = "3"
+members = [ "cactc","cactc_core", "xtask"]
+default-members = ["cactc", "cactc_core"]
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Karesis<yangyifeng23@mails.ucas.ac.cn"]
+description = "A compiler for cact(a language that like a mini c) which is just a practice"
+documentation = "README"
+license = "MIT"

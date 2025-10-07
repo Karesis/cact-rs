@@ -1,0 +1,128 @@
+(* --- Lexical Building Blocks --- *)
+letter = "a"..."z" | "A"..."Z" | "_" ;
+digit = "0"..."9" ;
+hexdigit = digit | "a"..."f" | "A"..."F" ;
+octdigit = "0"..."7" ;
+
+(* --- Identifiers --- *)
+[cite_start](* An identifier starts with a letter or underscore, followed by any number of letters, digits, or underscores. [cite: 30] *)
+Identifier = letter, { letter | digit } ;
+
+(* --- Literals --- *)
+
+[cite_start](* Integer Literals [cite: 15] *)
+DecimalConst = "0" | (("1"..."9"), { digit }) ; [cite_start](* [cite: 16] *)
+OctalConst = "0", { octdigit } ; [cite_start](* [cite: 17] *)
+HexadecConst = ("0x" | "0X"), hexdigit, { hexdigit } ; [cite_start](* [cite: 18] *)
+IntConst = DecimalConst | OctalConst | HexadecConst ;
+
+[cite_start](* Floating-Point Literals [cite: 20] *)
+Digits = digit, { digit } ;
+ExponentPart = ('e' | 'E'), ['+' | '-'], Digits ;
+FloatSuffix = 'f' | 'F' ;
+
+(* A 64-bit double constant (no suffix)[cite_start]. Can be in normal or exponential form. [cite: 22] *)
+DoubleConst = (Digits, ".", {Digits}, [ExponentPart])
+            | ({Digits}, ".", Digits, [ExponentPart])
+            | (Digits, ExponentPart) ;
+
+(* A 32-bit float constant (requires 'f' or 'F' suffix)[cite_start]. [cite: 21] *)
+FloatConst = (Digits, ".", {Digits}, [ExponentPart], FloatSuffix)
+           | ({Digits}, ".", Digits, [ExponentPart], FloatSuffix)
+           | (Digits, ExponentPart, FloatSuffix) ;
+
+Number = IntConst | FloatConst | DoubleConst ;
+
+[cite_start](* Boolean Literals [cite: 28] *)
+BoolConst = "true" | "false" ;
+
+(* --- Comments & Whitespace (Typically skipped by the parser) --- *)
+Whitespace = { " " | "\t" | "\n" | "\r" } ; [cite_start](* [cite: 31] *)
+LineComment = "//", { any character except newline } ; [cite_start](* [cite: 33] *)
+BlockComment = "/*", { any sequence of characters not containing "*/" }, "*/" ; [cite_start](* [cite: 34] *)
+
+(* --- Top Level: Compilation Unit --- *)
+[cite_start](* A program is a sequence of global declarations and function definitions. [cite: 50] *)
+CompilationUnit = { Decl | FuncDef } ;
+
+(* --- Declarations --- *)
+Decl = ConstDecl | VarDecl ; [cite_start](* [cite: 50] *)
+
+[cite_start](* Constant declaration: const int c = 10; [cite: 50] *)
+ConstDecl = "const", BType, ConstDef, { ",", ConstDef }, ";" ;
+ConstDef = Identifier, { "[", IntConst, "]" }, "=", ConstInitVal ;
+
+[cite_start](* Variable declaration: int a, b = 2; [cite: 50] *)
+VarDecl = BType, VarDef, { ",", VarDef }, ";" ;
+VarDef = Identifier, { "[", IntConst, "]" }, [ "=", ConstInitVal ] ;
+
+[cite_start](* Basic types [cite: 14] *)
+BType = "int" | "bool" | "float" | "double" ;
+
+[cite_start](* Initializer for a variable or constant. [cite: 50] *)
+(* Note: An initializer can be a single constant expression or an aggregate initializer for arrays. *)
+ConstInitVal = ConstExp | "{", [ ConstInitVal, { ",", ConstInitVal } ], "}" ;
+
+[cite_start](* Constant expression. Note: The CACT spec is very strict, allowing only single literal values, not expressions like '4+5'. [cite: 52, 77] *)
+ConstExp = Number | BoolConst ;
+
+(* --- Functions --- *)
+FuncDef = FuncType, Identifier, "(", [ FuncFParams ], ")", Block ; [cite_start](* [cite: 50] *)
+FuncType = "void" | BType ; [cite_start](* [cite: 50, 98] *)
+
+[cite_start](* Formal parameter list for a function definition. [cite: 50] *)
+FuncFParams = FuncFParam, { ",", FuncFParam } ;
+[cite_start](* A single formal parameter. Note the rule for array parameters where the first dimension size can be omitted. [cite: 70, 106] *)
+FuncFParam = BType, Identifier, [ "[", [IntConst], "]", { "[", IntConst, "]" } ] ;
+
+(* --- Statements --- *)
+Block = "{", { BlockItem }, "}" ; [cite_start](* [cite: 52] *)
+BlockItem = Decl | Stmt ; [cite_start](* [cite: 52] *)
+
+Stmt = (LVal, "=", Exp, ";")
+     | ([Exp], ";") (* An expression statement, can be empty. *)
+     | Block
+     | ("if", "(", Cond, ")", Stmt, [ "else", Stmt ])
+     | ("while", "(", Cond, ")", Stmt)
+     | ("break", ";")
+     | ("continue", ";")
+     | ("return", [Exp], ";") ; [cite_start](* [cite: 52] *)
+
+(* --- Expressions --- *)
+[cite_start](* The expression grammar is structured to enforce operator precedence and associativity. [cite: 37] *)
+Exp = AddExp | BoolConst ;
+Cond = LOrExp ;
+
+(* Precedence 8: Logical OR || (left-associative) *)
+LOrExp = LAndExp, { "||", LAndExp } ;
+
+(* Precedence 7: Logical AND && (left-associative) *)
+LAndExp = EqExp, { "&&", EqExp } ;
+
+(* Precedence 6: Equality ==, != (left-associative) *)
+EqExp = RelExp, { ("==" | "!="), RelExp } ;
+
+(* Precedence 5: Relational <, >, <=, >= (left-associative) *)
+RelExp = AddExp, { ("<" | ">" | "<=" | ">="), AddExp } ;
+
+(* Precedence 4: Additive +, - (left-associative) *)
+AddExp = MulExp, { ("+" | "-"), MulExp } ;
+
+(* Precedence 3: Multiplicative *, /, % (left-associative) *)
+MulExp = UnaryExp, { ("*" | "/" | "%"), UnaryExp } ;
+
+(* Precedence 2: Unary operators +, -, ! (right-associative) *)
+UnaryExp = PrimaryExp
+         | (("+" | "-" | "!"), UnaryExp)
+         | (Identifier, "(", [ FuncRParams ], ")") ; (* Function call *)
+
+(* Precedence 1: Primary Expressions *)
+PrimaryExp = ("(", Exp, ")")
+           | LVal
+           | Number ;
+
+(* Left-value, i.e., a variable or an array element access. [cite: 160] *)
+LVal = Identifier, { "[", Exp, "]" } ;
+
+(* Actual parameter list for a function call.  *)
+FuncRParams = Exp, { ",", Exp } ;
