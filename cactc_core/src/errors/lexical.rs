@@ -1,5 +1,3 @@
-use std::default;
-
 use thiserror::Error;
 use miette::{Diagnostic, SourceSpan};
 use crate::lexer::Token;

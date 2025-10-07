@@ -116,7 +116,7 @@ mod tests {
                 println!("[DEBUG]The current dir is: {path:?}");
             }
             Err(e) => {
-                println!("[DEGUG]Error when getting the current dir");
+                println!("[DEGUG]Error when getting the current dir: {e}");
             }
         }
         let source_file = fs::read_to_string("../tests/all_tests_in.cact")?;
