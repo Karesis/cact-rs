@@ -3,3 +3,4 @@ mod interner;
 mod lexer;
 mod span;
 mod errors;
+mod ast;
