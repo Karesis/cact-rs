@@ -3,15 +3,15 @@ mod lexical;
 mod parsing;
 mod semantic;
 
-use codegen::CodeGenError;
-use lexical::LexicalError;
-use parsing::ParsingError;
-use semantic::SemanticError;
+pub use codegen::CodeGenError;
+pub use lexical::LexicalError;
+pub use parsing::ParsingError;
+pub use semantic::SemanticError;
 use thiserror::Error;
 use miette::Diagnostic;
 
 /// All errors
-#[derive(Debug, Error, Diagnostic)]
+#[derive(Debug, Error, Diagnostic, Clone)]
 pub enum CompilerError {
     /// lexer
     #[error(transparent)]

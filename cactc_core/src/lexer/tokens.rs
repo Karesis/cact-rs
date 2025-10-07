@@ -1,32 +1,41 @@
 use logos::{Lexer, Logos};
 use std::fmt::{self, Display, Formatter};
+use crate::errors::LexicalError;
 
-fn parse_int(lex: &mut Lexer<Token>) -> Result<i32, &'static str> {
+fn parse_int(lex: &mut Lexer<Token>) -> Result<i32, LexicalError> {
     let slice = lex.slice();
-    if let Some(s) = slice.strip_prefix("0x").or_else(|| slice.strip_prefix("0X")) {
+    let span = lex.span().into();
+    let result = if let Some(s) = slice.strip_prefix("0x").or_else(|| slice.strip_prefix("0X")) {
         //  Hexadecimal
-        i32::from_str_radix(s, 16).map_err(|_| "Failed to parse hex integer")
+        i32::from_str_radix(s, 16)
     } else if slice.starts_with('0') && slice.len() > 1 {
         // Octal
-        i32::from_str_radix(&slice[1..], 8).map_err(|_| "Failed to parse octal integer")
+        i32::from_str_radix(&slice[1..], 8)
     } else {
         // Decimal
-        slice.parse().map_err(|_| "Failed to parse decimal integer")
-    }
+        slice.parse()
+    };
+
+    result.map_err(|source| LexicalError::InvalidIntegerLiteral { source, span })
 }
 
-fn parse_float(lex: &mut Lexer<Token>) -> Result<f32, &'static str> {
+fn parse_float(lex: &mut Lexer<Token>) -> Result<f32, LexicalError> {
     let slice = lex.slice();
+    let span = lex.span().into();
     // delete f/F endien
-    slice[..slice.len() - 1].parse().map_err(|_| "Failed to parse float")
+    slice[..slice.len() - 1].parse().map_err(|source| LexicalError::InvalidFloatLiteral { source, span })
 }
 
-fn parse_double(lex: &mut Lexer<Token>) -> Result<f64, &'static str> {
-    lex.slice().parse().map_err(|_| "Failed to parse double")
+fn parse_double(lex: &mut Lexer<Token>) -> Result<f64, LexicalError> {
+    let slice = lex.slice();
+    let span = lex.span().into();
+    
+    slice.parse()
+        .map_err(|source| LexicalError::InvalidDoubleLiteral { source, span })
 }
 
 #[derive(Logos, Debug, PartialEq, Clone)]
-#[logos(error = &'static str)]
+#[logos(error(LexicalError, LexicalError::lex_error_handler))]
 pub enum Token {
     // --- Keywords  ---
     #[token("const")]
