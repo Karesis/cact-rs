@@ -4,6 +4,7 @@ mod chunkfooter;
 use std::collections::HashMap;
 use std::sync::RwLock;
 use syncbump::SyncBump;
+use once_cell::sync::Lazy;
 
 // --- 符號 (Symbol) 類型 ---
 /// 一個輕量級的、唯一的字符串標識符。
@@ -96,7 +97,8 @@ impl<'bump, const MIN_ALIGN: usize> Interner<'bump, MIN_ALIGN> {
     }
 }
 
-
+// the global static interner arena
+pub static INTERNER: Lazy<Interner<'static>> = Lazy::new(|| Interner::with_capacity(4096));
 
 #[cfg(test)]
 mod tests {
