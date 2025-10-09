@@ -2,7 +2,7 @@ use std::ops::Range;
 use miette::SourceSpan;
 use chumsky::span::Span as ChumskySpan;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Span {
     start: usize,
     end: usize

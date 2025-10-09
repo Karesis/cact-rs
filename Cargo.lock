@@ -69,6 +69,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2261d10cca569e4643e526d8dc2e62e433cc8aba21ab764233731f8d369bf394"
 
 [[package]]
+name = "bumpalo"
+version = "3.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46c5e41b57b8bba42a04676d81cb89e9ee8e859a1a66f80a5a72e1cb76b34d43"
+
+[[package]]
 name = "cactc"
 version = "0.1.0"
 
@@ -76,6 +82,7 @@ version = "0.1.0"
 name = "cactc_core"
 version = "0.1.0"
 dependencies = [
+ "bumpalo",
  "chumsky",
  "logos",
  "miette",

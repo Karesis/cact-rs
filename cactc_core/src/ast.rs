@@ -1,20 +1,44 @@
+use std::marker::PhantomData;
+
+use bumpalo::collections::Vec;
+use crate::span::Span;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Node<'ast, T> {
+    pub kind: T,
+    pub span: Span,
+    // ghost note
+    _maker: PhantomData<&'ast T>,
+}
+
+// create node in parser
+impl<'ast, T: 'ast> Node<'ast, T> {
+    pub fn new(kind: T, span: Span) -> Self {
+        Self { 
+            kind, 
+            span,
+            _maker: PhantomData,
+        }
+    }
+}
+
 // ---  Top-Level AST Structures ---
 
 /// The root of the AST, representing a complete CACT source file.
 /// A program is a sequence of global items. [cite: 50]
 #[derive(Debug, Clone, PartialEq)]
-pub struct CompilationUnit {
-    pub items: Vec<GlobalItem>,
+pub struct CompilationUnit<'ast> {
+    pub items: Vec<'ast, Node<'ast, GlobalItem<'ast>>>,
 }
 
 /// A top-level item in a program: either a function definition or a global declaration.
 #[derive(Debug, Clone, PartialEq)]
-pub enum GlobalItem {
-    Function(FuncDef),
-    Declaration(Decl),
+pub enum GlobalItem<'ast> {
+    Function(FuncDef<'ast>),
+    Declaration(Decl<'ast>),
 }
 
-/// The four basic types in CACT. [cite: 14]
+///  The four basic types in CACT. [cite: 14]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BType {
     Int,
@@ -27,50 +51,50 @@ pub enum BType {
 
 /// A declaration, which can be for constants (`const`) or variables. [cite: 50]
 #[derive(Debug, Clone, PartialEq)]
-pub enum Decl {
-    Const(ConstDecl),
-    Var(VarDecl),
+pub enum Decl<'ast> {
+    Const(Node<'ast, ConstDecl<'ast>>),
+    Var(Node<'ast, VarDecl<'ast>>),
 }
 
 /// A constant declaration, e.g., `const int c = 1;`. [cite: 50]
 #[derive(Debug, Clone, PartialEq)]
-pub struct ConstDecl {
+pub struct ConstDecl<'ast> {
     pub b_type: BType,
-    pub defs: Vec<ConstDef>,
+    pub defs: Vec<'ast, Node<'ast, ConstDef<'ast>>>,
 }
 
 /// A single constant definition, containing its name, dimensions (if array), and initializer.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ConstDef {
+pub struct ConstDef<'ast> {
     pub name: String,
     /// Dimensions for an array. Empty if not an array. Must be integer constants. [cite: 50]
-    pub dimensions: Vec<i32>,
-    pub init: ConstInitVal,
+    pub dimensions: Vec<'ast, i32>,
+    pub init: Node<'ast, ConstInitVal<'ast>>,
 }
 
 /// A variable declaration, e.g., `int a = 1, b;`. [cite: 50]
 #[derive(Debug, Clone, PartialEq)]
-pub struct VarDecl {
+pub struct VarDecl<'ast> {
     pub b_type: BType,
-    pub defs: Vec<VarDef>,
+    pub defs: Vec<'ast, Node<'ast, VarDef<'ast>>>,
 }
 
 /// A single variable definition, with an optional initializer.
 #[derive(Debug, Clone, PartialEq)]
-pub struct VarDef {
+pub struct VarDef<'ast> {
     pub name: String,
     /// Dimensions for an array. Empty if not an array. Must be integer constants. [cite: 50]
-    pub dimensions: Vec<i32>,
-    pub init: Option<ConstInitVal>,
+    pub dimensions: Vec<'ast, i32>,
+    pub init: Option<Node<'ast, ConstInitVal<'ast>>>,
 }
 
 /// An initializer for a constant or variable. [cite: 50]
 #[derive(Debug, Clone, PartialEq)]
-pub enum ConstInitVal {
+pub enum ConstInitVal<'ast> {
     /// A single constant expression, e.g., `= 5`.
     Single(ConstExp),
     /// An aggregate initializer for arrays, e.g., `= {1, 2, 3}`.
-    Aggregate(Vec<ConstInitVal>),
+    Aggregate(Vec<'ast, Node<'ast, ConstInitVal<'ast>>>),
 }
 
 /// A constant expression, which in CACT can only be a literal value. [cite: 52]
@@ -80,11 +104,11 @@ pub type ConstExp = Literal;
 
 /// A function definition. [cite: 50]
 #[derive(Debug, Clone, PartialEq)]
-pub struct FuncDef {
+pub struct FuncDef<'ast> {
     pub return_type: FuncType,
     pub name: String,
-    pub params: Vec<FuncFParam>,
-    pub body: Block,
+    pub params: Vec<'ast, Node<'ast, FuncFParam<'ast>>>,
+    pub body: Node<'ast, Block<'ast>>,
 }
 
 /// A function's return type, which can be `void` or one of the basic types. [cite: 50]
@@ -96,83 +120,95 @@ pub enum FuncType {
 
 /// A single formal parameter in a function definition. [cite: 50]
 #[derive(Debug, Clone, PartialEq)]
-pub struct FuncFParam {
+pub struct FuncFParam<'ast> {
     pub b_type: BType,
     pub name: String,
     /// Represents array dimensions. An empty vector means it's a scalar.
     /// A non-empty vector means it's an array. `None` represents an unsized
     /// first dimension (e.g., `int a[]`). [cite: 104, 106]
-    pub dimensions: Vec<Option<i32>>,
+    pub dimensions: Vec<'ast, Option<i32>>,
 }
 
 // --- Statements and Blocks ---
 
 /// A block of code, enclosed in curly braces `{}`. [cite: 52]
 #[derive(Debug, Clone, PartialEq)]
-pub struct Block {
-    pub items: Vec<BlockItem>,
+pub struct Block<'ast> {
+    pub items: Vec<'ast, Node<'ast, BlockItem<'ast>>>,
 }
 
 /// An item within a block: either a local declaration or a statement. [cite: 52]
 #[derive(Debug, Clone, PartialEq)]
-pub enum BlockItem {
-    Declaration(Decl),
-    Statement(Stmt),
+pub enum BlockItem<'ast> {
+    Declaration(Node<'ast, Decl<'ast>>),
+    Statement(Node<'ast, Stmt<'ast>>),
 }
 
 /// Represents all possible kinds of statements. [cite: 52]
 #[derive(Debug, Clone, PartialEq)]
-pub enum Stmt {
+pub enum Stmt<'ast> {
     /// Assignment, e.g., `a = 5;`.
-    Assign { left: LVal, right: Exp },
+    Assign { 
+        left: Node<'ast, LVal<'ast>>, 
+        right: Node<'ast, Exp<'ast>> 
+    },
     /// An expression used as a statement, e.g., `foo();`. `None` for empty statement `;`.
-    Expression(Option<Exp>),
+    Expression(Option<Node<'ast, Exp<'ast>>>),
     /// A code block as a statement.
-    Block(Block),
+    Block(Block<'ast>),
     /// An `if` statement with an optional `else` branch.
     If {
-        cond: Exp,
-        then_branch: Box<Stmt>,
-        else_branch: Option<Box<Stmt>>,
+        cond: Node<'ast, Exp<'ast>>,
+        then_branch: &'ast Node<'ast, Stmt<'ast>>,
+        else_branch: Option<&'ast Node<'ast, Stmt<'ast>>>,
     },
     /// A `while` loop.
-    While { cond: Exp, body: Box<Stmt> },
+    While { 
+        cond: Node<'ast, Exp<'ast>>, 
+        body: &'ast Node<'ast, Stmt<'ast>> 
+    },
     /// A `break` statement.
     Break,
     /// A `continue` statement.
     Continue,
     /// A `return` statement with an optional return value.
-    Return(Option<Exp>),
+    Return(Option<Node<'ast, Exp<'ast>>>),
 }
 
 // --- Expressions and Operators ---
 
 /// An expression.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Exp {
+pub enum Exp<'ast> {
     /// A literal value like `123`, `true`, or `4.5f`.
     Literal(Literal),
     /// A left-value, which can be a variable or an array element access.
-    LValue(LVal),
+    LValue(Node<'ast, LVal<'ast>>),
     /// A unary operation, e.g., `-x` or `!flag`.
-    Unary { op: UnaryOp, operand: Box<Exp> },
+    Unary { 
+        op: UnaryOp, 
+        operand: &'ast Node<'ast, Exp<'ast>> 
+    },
     /// A binary operation, e.g., `a + b`.
     Binary {
-        left: Box<Exp>,
+        left: &'ast Node<'ast, Exp<'ast>>,
         op: BinaryOp,
-        right: Box<Exp>,
+        right: &'ast Node<'ast, Exp<'ast>>,
     },
     /// A function call, e.g., `foo(a, 5)`.
-    Call { name: String, args: Vec<Exp> },
+    Call { 
+        name: String, 
+        args: Vec<'ast, Node<'ast, Exp<'ast>>> 
+    },
 }
 
 /// Represents a value that can appear on the left side of an assignment. [cite: 160]
 /// This is either a variable name or an array element access.
 #[derive(Debug, Clone, PartialEq)]
-pub struct LVal {
+pub struct LVal<'ast> {
     pub name: String,
     /// List of index expressions for array access, e.g., `arr[i][j]`. Empty if it's a simple variable.
-    pub indices: Vec<Exp>,
+    pub indices: Vec<'ast, Node<'ast, Exp<'ast>>>,
 }
 
 /// A literal constant value. [cite: 15, 20, 28]
