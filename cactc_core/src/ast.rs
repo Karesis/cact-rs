@@ -1,217 +1,401 @@
 use std::marker::PhantomData;
-
-use bumpalo::collections::Vec;
+use std::ops::{Index, IndexMut};
+use bumpalo::Bump;
+use bumpalo::collections::Vec as BumpVec;
 use crate::span::Span;
+use crate::interner::Symbol;
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Node<'ast, T> {
-    pub kind: T,
-    pub span: Span,
-    // ghost note
-    _maker: PhantomData<&'ast T>,
+// ===================================================================
+//  ID and Arena (The Core of the New Design)
+// ===================================================================
+
+/// A type-safe ID that references a node in the AstArena.
+/// It's a lightweight wrapper around a `u32` index, making it cheap to copy.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct NodeId<T> {
+    raw: u32,
+    _phantom: PhantomData<T>,
 }
 
-// create node in parser
-impl<'ast, T: 'ast> Node<'ast, T> {
-    pub fn new(kind: T, span: Span) -> Self {
-        Self { 
-            kind, 
-            span,
-            _maker: PhantomData,
-        }
+// Manually implement Copy and Clone because derive would require T: Copy.
+impl<T> Copy for NodeId<T> {}
+impl<T> Clone for NodeId<T> {
+    fn clone(&self) -> Self { *self }
+}
+
+impl<T> NodeId<T> {
+    fn new(index: usize) -> Self {
+        Self { raw: index as u32, _phantom: PhantomData }
+    }
+    pub fn index(self) -> usize {
+        self.raw as usize
     }
 }
 
+/// The Arena stores all the AST nodes created during parsing.
+/// The AST itself will only contain IDs pointing into these vectors.
+#[derive(Debug)]
+pub struct AstArena<'ast> {
+    bump: &'ast Bump,
+    // We create separate vectors for major node kinds.
+    // This improves data locality and keeps the arena organized.
+    pub global_items: BumpVec<'ast, Node<GlobalItem<'ast>>>,
+    pub decls: BumpVec<'ast, Node<Decl<'ast>>>,
+    pub stmts: BumpVec<'ast, Node<Stmt<'ast>>>,
+    pub exprs: BumpVec<'ast, Node<Exp<'ast>>>,
+    pub lvals: BumpVec<'ast, Node<LVal<'ast>>>,
+    pub blocks: BumpVec<'ast, Node<Block<'ast>>>,
+    pub const_init_vals: BumpVec<'ast, Node<ConstInitVal<'ast>>>,
+    // Smaller, self-contained items can sometimes be stored directly,
+    // but for consistency and flexibility, adding them to the arena is also fine.
+    pub const_defs: BumpVec<'ast, Node<ConstDef<'ast>>>,
+    pub var_defs: BumpVec<'ast, Node<VarDef<'ast>>>,
+    pub func_f_params: BumpVec<'ast, Node<FuncFParam<'ast>>>,
+}
+
+/// 为 AstArena 实现 Index 和 IndexMut traits 的宏
+macro_rules! impl_arena_index {
+    ( $( ($NodeType:ident, $field:ident) ),* ) => {
+        $(
+            // --- 为 $NodeType 实现 Index ---
+            impl<'ast> std::ops::Index<NodeId<Node<$NodeType<'ast>>>> for AstArena<'ast> {
+                type Output = Node<$NodeType<'ast>>;
+
+                fn index(&self, id: NodeId<Node<$NodeType<'ast>>>) -> &Self::Output {
+                    // 假设 id.index() 返回 usize
+                    &self.$field[id.index()]
+                }
+            }
+
+            // --- 为 $NodeType 实现 IndexMut ---
+            impl<'ast> std::ops::IndexMut<NodeId<Node<$NodeType<'ast>>>> for AstArena<'ast> {
+                fn index_mut(&mut self, id: NodeId<Node<$NodeType<'ast>>>) -> &mut Self::Output {
+                    &mut self.$field[id.index()]
+                }
+            }
+        )*
+    };
+}
+
+impl<'ast> AstArena<'ast> {
+    /// Creates a new, empty AstArena within a given Bump allocator.
+    pub fn new_in(bump: &'ast Bump) -> Self {
+        Self {
+            bump,
+            global_items: BumpVec::new_in(bump),
+            decls: BumpVec::new_in(bump),
+            stmts: BumpVec::new_in(bump),
+            exprs: BumpVec::new_in(bump),
+            lvals: BumpVec::new_in(bump),
+            blocks: BumpVec::new_in(bump),
+            const_init_vals: BumpVec::new_in(bump),
+            const_defs: BumpVec::new_in(bump),
+            var_defs: BumpVec::new_in(bump),
+            func_f_params: BumpVec::new_in(bump),
+        }
+    }
+
+    // Allocation methods for each node type.
+    // The parser will call these to create nodes.
+
+    pub fn alloc_global_item(&mut self, item: Node<GlobalItem<'ast>>) -> NodeId<Node<GlobalItem<'ast>>> {
+        let id = NodeId::new(self.global_items.len());
+        self.global_items.push(item);
+        id
+    }
+
+    pub fn alloc_decl(&mut self, decl: Node<Decl<'ast>>) -> NodeId<Node<Decl<'ast>>> {
+        let id = NodeId::new(self.decls.len());
+        self.decls.push(decl);
+        id
+    }
+
+    pub fn alloc_stmt(&mut self, stmt: Node<Stmt<'ast>>) -> NodeId<Node<Stmt<'ast>>> {
+        let id = NodeId::new(self.stmts.len());
+        self.stmts.push(stmt);
+        id
+    }
+
+    pub fn alloc_expr(&mut self, expr: Node<Exp<'ast>>) -> NodeId<Node<Exp<'ast>>> {
+        let id = NodeId::new(self.exprs.len());
+        self.exprs.push(expr);
+        id
+    }
+    
+    pub fn alloc_lval(&mut self, lval: Node<LVal<'ast>>) -> NodeId<Node<LVal<'ast>>> {
+        let id = NodeId::new(self.lvals.len());
+        self.lvals.push(lval);
+        id
+    }
+
+    pub fn alloc_block(&mut self, block: Node<Block<'ast>>) -> NodeId<Node<Block<'ast>>> {
+        let id = NodeId::new(self.blocks.len());
+        self.blocks.push(block);
+        id
+    }
+    
+    pub fn alloc_const_init_val(&mut self, val: Node<ConstInitVal<'ast>>) -> NodeId<Node<ConstInitVal<'ast>>> {
+        let id = NodeId::new(self.const_init_vals.len());
+        self.const_init_vals.push(val);
+        id
+    }
+
+    pub fn alloc_const_def(&mut self, def: Node<ConstDef<'ast>>) -> NodeId<Node<ConstDef<'ast>>> {
+        let id = NodeId::new(self.const_defs.len());
+        self.const_defs.push(def);
+        id
+    }
+
+    pub fn alloc_var_def(&mut self, def: Node<VarDef<'ast>>) -> NodeId<Node<VarDef<'ast>>> {
+        let id = NodeId::new(self.var_defs.len());
+        self.var_defs.push(def);
+        id
+    }
+    
+    pub fn alloc_func_f_param(&mut self, param: Node<FuncFParam<'ast>>) -> NodeId<Node<FuncFParam<'ast>>> {
+        let id = NodeId::new(self.func_f_params.len());
+        self.func_f_params.push(param);
+        id
+    }
+
+    pub fn alloc_param_dimensions(
+        &self,
+        first: Option<i32>,
+        others: Vec<i32>,
+    ) -> &'ast [Option<i32>] {
+        // 将之前在 parser 中的逻辑完全移动到这里
+        let mut dims = BumpVec::new_in(self.bump);
+        dims.push(first);
+        dims.extend(others.into_iter().map(Some));
+        dims.into_bump_slice()
+    }
+
+    pub fn alloc_options_i32(&self, vec: BumpVec<'ast, Option<i32>>) -> &'ast [Option<i32>] {
+        vec.into_bump_slice()
+    }
+
+    /// 从一个迭代器中分配一个 NodeId 列表，并返回一个生命周期正确的切片。
+    pub fn alloc_node_ids<T, I>(&self, iter: I) -> &'ast [NodeId<T>]
+    where
+        I: IntoIterator<Item = NodeId<T>>,
+        I::IntoIter: ExactSizeIterator, // 迭代器最好能知道自己的长度，性能更佳
+    {
+        let mut vec = BumpVec::new_in(self.bump); // 直接访问内部的 bump
+        vec.extend(iter);
+        vec.into_bump_slice()
+    }
+
+    /// 从一个迭代器分配一个 i32 列表 (用于数组维度等)
+    pub fn alloc_i32s<I>(&self, iter: I) -> &'ast [i32]
+    where
+        I: IntoIterator<Item = i32>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        let mut vec = BumpVec::new_in(self.bump);
+        vec.extend(iter);
+        vec.into_bump_slice()
+    }
+
+    pub fn alloc_block_items<I>(&self, iter: I) -> &'ast [BlockItem<'ast>]
+    where
+        I: IntoIterator<Item = BlockItem<'ast>>,
+    {
+        let mut vec = BumpVec::new_in(self.bump);
+        vec.extend(iter);
+        vec.into_bump_slice()
+    }
+}
+
+impl_arena_index! {
+    (GlobalItem, global_items),
+    (Decl, decls),
+    (Stmt, stmts),
+    (Exp, exprs),
+    (LVal, lvals),
+    (Block, blocks),
+    (ConstInitVal, const_init_vals),
+    (ConstDef, const_defs),
+    (VarDef, var_defs),
+    (FuncFParam, func_f_params)
+}
+
+// ===================================================================
+//  Generic AST Structures
+// ===================================================================
+
+/// A generic node containing a `kind` and its `Span`.
+/// It is now `Copy` because it no longer holds complex types directly.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Node<T> {
+    pub kind: T,
+    pub span: Span,
+}
+
+impl<T> Node<T> {
+    pub fn new(kind: T, span: Span) -> Self {
+        Self { kind, span }
+    }
+}
+
+
+// ===================================================================
+//  Refactored AST Definitions
+// ===================================================================
+
 // ---  Top-Level AST Structures ---
 
-/// The root of the AST, representing a complete CACT source file.
-/// A program is a sequence of global items. [cite: 50]
-#[derive(Debug, Clone, PartialEq)]
+/// The root of the AST. It's now just a slice of IDs pointing to global items.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CompilationUnit<'ast> {
-    pub items: Vec<'ast, Node<'ast, GlobalItem<'ast>>>,
+    pub items: &'ast [NodeId<Node<GlobalItem<'ast>>>],
 }
 
-/// A top-level item in a program: either a function definition or a global declaration.
-#[derive(Debug, Clone, PartialEq)]
+/// A top-level item. Notice the `'ast` lifetime is still here because
+/// some variants hold slices (`&'ast [...]`) which are tied to the arena's lifetime.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GlobalItem<'ast> {
     Function(FuncDef<'ast>),
-    Declaration(Decl<'ast>),
+    Declaration(NodeId<Node<Decl<'ast>>>), // Changed to ID
 }
 
-///  The four basic types in CACT. [cite: 14]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BType {
-    Int,
-    Bool,
-    Float,
-    Double,
-}
+pub enum BType { Int, Bool, Float, Double }
+
 
 // --- Declarations ---
 
-/// A declaration, which can be for constants (`const`) or variables. [cite: 50]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Decl<'ast> {
-    Const(Node<'ast, ConstDecl<'ast>>),
-    Var(Node<'ast, VarDecl<'ast>>),
+    Const(ConstDecl<'ast>),
+    Var(VarDecl<'ast>),
 }
 
-/// A constant declaration, e.g., `const int c = 1;`. [cite: 50]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConstDecl<'ast> {
     pub b_type: BType,
-    pub defs: Vec<'ast, Node<'ast, ConstDef<'ast>>>,
+    pub defs: &'ast [NodeId<Node<ConstDef<'ast>>>], // Changed to slice of IDs
 }
 
-/// A single constant definition, containing its name, dimensions (if array), and initializer.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConstDef<'ast> {
-    pub name: String,
-    /// Dimensions for an array. Empty if not an array. Must be integer constants. [cite: 50]
-    pub dimensions: Vec<'ast, i32>,
-    pub init: Node<'ast, ConstInitVal<'ast>>,
+    pub name: Symbol, // Changed from String
+    pub dimensions: &'ast [i32], // Changed from Vec
+    pub init: NodeId<Node<ConstInitVal<'ast>>>, // Changed to ID
 }
 
-/// A variable declaration, e.g., `int a = 1, b;`. [cite: 50]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VarDecl<'ast> {
     pub b_type: BType,
-    pub defs: Vec<'ast, Node<'ast, VarDef<'ast>>>,
+    pub defs: &'ast [NodeId<Node<VarDef<'ast>>>], // Changed to slice of IDs
 }
 
-/// A single variable definition, with an optional initializer.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VarDef<'ast> {
-    pub name: String,
-    /// Dimensions for an array. Empty if not an array. Must be integer constants. [cite: 50]
-    pub dimensions: Vec<'ast, i32>,
-    pub init: Option<Node<'ast, ConstInitVal<'ast>>>,
+    pub name: Symbol, // Changed from String
+    pub dimensions: &'ast [i32], // Changed from Vec
+    pub init: Option<NodeId<Node<ConstInitVal<'ast>>>>, // Changed to Option<ID>
 }
 
-/// An initializer for a constant or variable. [cite: 50]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ConstInitVal<'ast> {
-    /// A single constant expression, e.g., `= 5`.
     Single(ConstExp),
-    /// An aggregate initializer for arrays, e.g., `= {1, 2, 3}`.
-    Aggregate(Vec<'ast, Node<'ast, ConstInitVal<'ast>>>),
+    Aggregate(&'ast [NodeId<Node<ConstInitVal<'ast>>>]), // Changed to slice of IDs
 }
 
-/// A constant expression, which in CACT can only be a literal value. [cite: 52]
 pub type ConstExp = Literal;
+
 
 // --- Functions ---
 
-/// A function definition. [cite: 50]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FuncDef<'ast> {
     pub return_type: FuncType,
-    pub name: String,
-    pub params: Vec<'ast, Node<'ast, FuncFParam<'ast>>>,
-    pub body: Node<'ast, Block<'ast>>,
+    pub name: Symbol, // Changed from String
+    pub params: &'ast [NodeId<Node<FuncFParam<'ast>>>], // Changed to slice of IDs
+    pub body: NodeId<Node<Block<'ast>>>, // Changed to ID
 }
 
-/// A function's return type, which can be `void` or one of the basic types. [cite: 50]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FuncType {
-    Void,
-    Type(BType),
-}
+pub enum FuncType { Void, Type(BType) }
 
-/// A single formal parameter in a function definition. [cite: 50]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FuncFParam<'ast> {
     pub b_type: BType,
-    pub name: String,
-    /// Represents array dimensions. An empty vector means it's a scalar.
-    /// A non-empty vector means it's an array. `None` represents an unsized
-    /// first dimension (e.g., `int a[]`). [cite: 104, 106]
-    pub dimensions: Vec<'ast, Option<i32>>,
+    pub name: Symbol, // Changed from String
+    pub dimensions: &'ast [Option<i32>], // Changed from Vec
 }
+
 
 // --- Statements and Blocks ---
 
-/// A block of code, enclosed in curly braces `{}`. [cite: 52]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Block<'ast> {
-    pub items: Vec<'ast, Node<'ast, BlockItem<'ast>>>,
+    pub items: &'ast [BlockItem<'ast>],
 }
 
-/// An item within a block: either a local declaration or a statement. [cite: 52]
-#[derive(Debug, Clone, PartialEq)]
+// BlockItem can be simplified. A block contains Decls and Stmts.
+// The arena can store DeclId and StmtId directly.
+// This enum helps distinguish them in a list.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BlockItem<'ast> {
-    Declaration(Node<'ast, Decl<'ast>>),
-    Statement(Node<'ast, Stmt<'ast>>),
+    Declaration(NodeId<Node<Decl<'ast>>>),
+    Statement(NodeId<Node<Stmt<'ast>>>),
 }
 
-/// Represents all possible kinds of statements. [cite: 52]
-#[derive(Debug, Clone, PartialEq)]
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Stmt<'ast> {
-    /// Assignment, e.g., `a = 5;`.
-    Assign { 
-        left: Node<'ast, LVal<'ast>>, 
-        right: Node<'ast, Exp<'ast>> 
+    Assign {
+        left: NodeId<Node<LVal<'ast>>>,
+        right: NodeId<Node<Exp<'ast>>>,
     },
-    /// An expression used as a statement, e.g., `foo();`. `None` for empty statement `;`.
-    Expression(Option<Node<'ast, Exp<'ast>>>),
-    /// A code block as a statement.
-    Block(Block<'ast>),
-    /// An `if` statement with an optional `else` branch.
+    Expression(Option<NodeId<Node<Exp<'ast>>>>),
+    Block(NodeId<Node<Block<'ast>>>), // Changed to ID
     If {
-        cond: Node<'ast, Exp<'ast>>,
-        then_branch: &'ast Node<'ast, Stmt<'ast>>,
-        else_branch: Option<&'ast Node<'ast, Stmt<'ast>>>,
+        cond: NodeId<Node<Exp<'ast>>>,
+        then_branch: NodeId<Node<Stmt<'ast>>>,
+        else_branch: Option<NodeId<Node<Stmt<'ast>>>>,
     },
-    /// A `while` loop.
-    While { 
-        cond: Node<'ast, Exp<'ast>>, 
-        body: &'ast Node<'ast, Stmt<'ast>> 
+    While {
+        cond: NodeId<Node<Exp<'ast>>>,
+        body: NodeId<Node<Stmt<'ast>>>,
     },
-    /// A `break` statement.
     Break,
-    /// A `continue` statement.
     Continue,
-    /// A `return` statement with an optional return value.
-    Return(Option<Node<'ast, Exp<'ast>>>),
+    Return(Option<NodeId<Node<Exp<'ast>>>>),
 }
+
 
 // --- Expressions and Operators ---
 
-/// An expression.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Exp<'ast> {
-    /// A literal value like `123`, `true`, or `4.5f`.
     Literal(Literal),
-    /// A left-value, which can be a variable or an array element access.
-    LValue(Node<'ast, LVal<'ast>>),
-    /// A unary operation, e.g., `-x` or `!flag`.
-    Unary { 
-        op: UnaryOp, 
-        operand: &'ast Node<'ast, Exp<'ast>> 
+    LValue(NodeId<Node<LVal<'ast>>>),
+    Unary {
+        op: UnaryOp,
+        operand: NodeId<Node<Exp<'ast>>>,
     },
-    /// A binary operation, e.g., `a + b`.
     Binary {
-        left: &'ast Node<'ast, Exp<'ast>>,
+        left: NodeId<Node<Exp<'ast>>>,
         op: BinaryOp,
-        right: &'ast Node<'ast, Exp<'ast>>,
+        right: NodeId<Node<Exp<'ast>>>,
     },
-    /// A function call, e.g., `foo(a, 5)`.
-    Call { 
-        name: String, 
-        args: Vec<'ast, Node<'ast, Exp<'ast>>> 
+    Call {
+        name: Symbol, // Changed from String
+        args: &'ast [NodeId<Node<Exp<'ast>>>],
     },
 }
 
-/// Represents a value that can appear on the left side of an assignment. [cite: 160]
-/// This is either a variable name or an array element access.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LVal<'ast> {
-    pub name: String,
-    /// List of index expressions for array access, e.g., `arr[i][j]`. Empty if it's a simple variable.
-    pub indices: Vec<'ast, Node<'ast, Exp<'ast>>>,
+    pub name: Symbol, // Changed from String
+    pub indices: &'ast [NodeId<Node<Exp<'ast>>>],
 }
 
-/// A literal constant value. [cite: 15, 20, 28]
+
+// --- Literals and Operators (No changes needed here) ---
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Literal {
     Int(i32),
@@ -220,19 +404,13 @@ pub enum Literal {
     Bool(bool),
 }
 
-/// Unary operators. [cite: 38]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnaryOp {
-    Plus,  // +
-    Minus, // -
-    Not,   // !
-}
+pub enum UnaryOp { Plus, Minus, Not }
 
-/// Binary operators. [cite: 38]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
-    Add, Sub, Mul, Div, Mod, // Arithmetic
-    Eq, Ne, // Equality
-    Lt, Gt, Le, Ge, // Relational
-    And, Or, // Logical
+    Add, Sub, Mul, Div, Mod,
+    Eq, Ne,
+    Lt, Gt, Le, Ge,
+    And, Or,
 }
